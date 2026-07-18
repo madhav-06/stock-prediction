@@ -1,0 +1,58 @@
+name: Build Voice POC APK
+
+on:
+  push:
+    branches: [claude/flutter-voice-to-text-poc-3mc85i]
+    paths:
+      - 'voice_to_text_poc/**'
+      - '.github/workflows/build-voice-poc-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate platform folders and patch permissions
+        working-directory: voice_to_text_poc
+        run: ./setup.sh
+
+      - name: Build APK
+        working-directory: voice_to_text_poc
+        run: flutter build apk --release
+
+      - name: Collect APK
+        run: cp voice_to_text_poc/build/app/outputs/flutter-apk/app-release.apk voice-poc.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voice-poc-apk
+          path: voice-poc.apk
+
+      - name: Attach APK to a GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: voice-poc-build-${{ github.run_number }}
+          name: Voice POC APK (build ${{ github.run_number }})
+          prerelease: true
+          files: voice-poc.apk
+          body: |
+            APK of the voice-to-text POC (Option 2: on-device STT first, Sarvam AI fallback).
+
+            On your Android phone: download voice-poc.apk below, open it, and allow
+            "install from unknown sources" when prompted. Then open the app, expand
+            Settings, and paste your Sarvam API key.
