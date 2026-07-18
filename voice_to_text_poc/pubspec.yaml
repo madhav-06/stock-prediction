@@ -13,8 +13,10 @@ dependencies:
   # Native on-device speech recognition (Android SpeechRecognizer / iOS SFSpeechRecognizer)
   speech_to_text: ^7.0.0
 
-  # Microphone recording to WAV (used only for the Sarvam fallback path)
-  record: ^5.1.2
+  # Microphone recording to WAV (used only for the Sarvam fallback path).
+  # 5.x is broken (record_linux 0.7.2 doesn't implement its own platform
+  # interface, which fails compilation on all targets), so use 7.x.
+  record: ^7.1.1
 
   # Temp directory for the recorded WAV file
   path_provider: ^2.1.4
