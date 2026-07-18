@@ -1,11 +1,14 @@
 /// Shared data types for the POC.
 
-/// Which engine produced a transcript.
-enum Engine { native, sarvam }
+/// Which engine (or combination) produced the final text.
+enum Engine { native, sarvam, hybrid }
 
 extension EngineLabel on Engine {
-  String get label => this == Engine.native ? 'NATIVE (on-device)' : 'SARVAM AI (cloud)';
-  String get shortLabel => this == Engine.native ? 'NATIVE' : 'SARVAM';
+  String get label => switch (this) {
+        Engine.native => 'NATIVE (on-device)',
+        Engine.sarvam => 'SARVAM AI (cloud)',
+        Engine.hybrid => 'NATIVE STT + SARVAM TRANSLATE',
+      };
 }
 
 /// Severity of a log line, used only for coloring in the log panel.

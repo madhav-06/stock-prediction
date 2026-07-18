@@ -18,13 +18,25 @@ Tanglish**:
  Tap mic
     │
     ▼
- Native on-device STT  ── confidence ≥ threshold ──►  ACCEPT (engine: NATIVE, free)
+ Native on-device STT ── confidence ≥ threshold ──► text is English? ──► ACCEPT (NATIVE, free)
+    │                                                    │
+    │                                     Tamil script + "Output English" ON
+    │                                                    ▼
+    │                              Sarvam TEXT translate (cheap) ──► ACCEPT (NATIVE + SARVAM TRANSLATE)
     │
     └─ confidence < threshold / empty / error
               │
               ▼
-       Record WAV (16 kHz mono) ──►  Sarvam Saarika API  ──►  ACCEPT (engine: SARVAM, paid)
+       Record WAV (16 kHz mono) ──► Sarvam Saaras (speech → ENGLISH) ──► ACCEPT (SARVAM, paid)
+       (with "Output English" OFF, the fallback uses Saarika: speech → same-language text)
 ```
+
+**A note on confidence:** the app does not compute confidence — it displays the
+raw score the OS recognizer returns with its final result. Android's Google
+recognizer is known to return coarse, flat scores (~0.87–0.90 for almost any
+utterance it parsed), so don't expect fine-grained values; the log also prints
+every alternate hypothesis the OS returned with its individual score. Set the
+threshold slider above the flat value (e.g. 0.90) to force the fallback.
 
 ---
 

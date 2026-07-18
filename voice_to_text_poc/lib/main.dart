@@ -40,6 +40,7 @@ enum PocState {
   nativeListening, // native on-device recognizer is active
   sarvamRecording, // fallback: recording raw audio for Sarvam
   sarvamSending, // fallback: uploading audio to Sarvam
+  translating, // accepted native text is being translated to English
 }
 
 class HomePage extends StatefulWidget {
@@ -60,6 +61,7 @@ class _HomePageState extends State<HomePage> {
   PocLanguage _language = PocLanguage.tanglish;
   double _confidenceThreshold = 0.70;
   bool _forceSarvam = false;
+  bool _translateToEnglish = true;
   final TextEditingController _apiKeyController = TextEditingController();
 
   // ---- runtime state ----
@@ -167,9 +169,15 @@ class _HomePageState extends State<HomePage> {
       case PocState.sarvamRecording:
         await _stopRecordingAndSendToSarvam();
       case PocState.sarvamSending:
-        break; // upload in progress, nothing to do
+      case PocState.translating:
+        break; // network call in progress, nothing to do
     }
   }
+
+  /// True when the text contains Tamil script (U+0B80–U+0BFF) and therefore
+  /// needs a translation step to produce English output.
+  bool _containsTamilScript(String text) =>
+      RegExp(r'[஀-௿]').hasMatch(text);
 
   // ---------------------------------------------------------------------------
   // Step 1 — native on-device recognition (free)
@@ -227,6 +235,20 @@ class _HomePageState extends State<HomePage> {
         'Final result in ${latencyMs}ms: "$words" | '
         'confidence=${confidence?.toStringAsFixed(2) ?? "not reported"}');
 
+    // Show everything the OS recognizer reported. Note: Android's Google
+    // recognizer is known to return coarse, flat scores (often ~0.87-0.90
+    // for anything it parsed) — the app displays the raw OS value, it does
+    // not compute confidence itself.
+    if (result.alternates.length > 1) {
+      final alts = result.alternates
+          .take(3)
+          .map((a) =>
+              '"${a.recognizedWords}" (${a.confidence.toStringAsFixed(2)})')
+          .join(' | ');
+      _log.info('NATIVE',
+          'OS returned ${result.alternates.length} hypotheses: $alts');
+    }
+
     if (words.isEmpty) {
       _log.warn('NATIVE', 'Empty transcript → falling back to Sarvam.');
       _startSarvamRecording(reason: 'native returned empty transcript');
@@ -243,7 +265,13 @@ class _HomePageState extends State<HomePage> {
           'NATIVE',
           'ACCEPTED (confidence '
           '${confidence == null ? "not reported — accepted by default" : "${confidence.toStringAsFixed(2)} ≥ threshold ${_confidenceThreshold.toStringAsFixed(2)}"}). '
-          'Engine used: NATIVE. Cost: free.');
+          'Speech-to-text engine: NATIVE. Cost: free.');
+      if (_translateToEnglish && _containsTamilScript(words)) {
+        // Cheap path to English: keep the free native transcript and only
+        // send TEXT (not audio) to Sarvam for translation.
+        _translateNativeText(words, confidence, latencyMs);
+        return;
+      }
       setState(() {
         _state = PocState.idle;
         _liveTranscript = '';
@@ -263,6 +291,73 @@ class _HomePageState extends State<HomePage> {
           '${_confidenceThreshold.toStringAsFixed(2)} → falling back to Sarvam.');
       _startSarvamRecording(
           reason: 'low native confidence ${confidence.toStringAsFixed(2)}');
+    }
+  }
+
+  /// Native STT was accepted but produced Tamil script and "Output English"
+  /// is on → translate the text via Sarvam (much cheaper than sending audio).
+  Future<void> _translateNativeText(
+      String words, double? confidence, int nativeLatencyMs) async {
+    final apiKey = _apiKeyController.text.trim();
+    if (apiKey.isEmpty) {
+      _log.warn('SARVAM',
+          'Transcript is Tamil but no API key set — cannot translate. '
+          'Showing the native transcript as-is.');
+      setState(() {
+        _state = PocState.idle;
+        _liveTranscript = '';
+        _lastOutcome = SttOutcome(
+          engine: Engine.native,
+          transcript: words,
+          confidence: confidence,
+          latencyMs: nativeLatencyMs,
+          languageCode: _resolvedNativeLocale ?? 'system default',
+          details: 'Not translated (no API key).',
+        );
+      });
+      return;
+    }
+
+    _log.info('SARVAM',
+        'Native transcript is Tamil script → translating text to English '
+        '(ta-IN → en-IN)…');
+    setState(() {
+      _state = PocState.translating;
+      _liveTranscript = '';
+    });
+
+    try {
+      final t = await _sarvam.translateToEnglish(input: words, apiKey: apiKey);
+      _log.success(
+          'SARVAM',
+          'Translated in ${t.latencyMs}ms: "${t.translatedText}". '
+          'Engine used: NATIVE STT (free) + SARVAM TRANSLATE (paid, text-only).');
+      setState(() {
+        _state = PocState.idle;
+        _lastOutcome = SttOutcome(
+          engine: Engine.hybrid,
+          transcript: t.translatedText,
+          confidence: confidence,
+          latencyMs: nativeLatencyMs + t.latencyMs,
+          languageCode: '${_resolvedNativeLocale ?? "?"} → en-IN',
+          details:
+              'Native STT ${nativeLatencyMs}ms + translate ${t.latencyMs}ms. Original: "$words"',
+        );
+      });
+    } catch (e) {
+      _log.error('SARVAM',
+          'Translation failed: $e — showing the native Tamil transcript.');
+      setState(() {
+        _state = PocState.idle;
+        _lastOutcome = SttOutcome(
+          engine: Engine.native,
+          transcript: words,
+          confidence: confidence,
+          latencyMs: nativeLatencyMs,
+          languageCode: _resolvedNativeLocale ?? 'system default',
+          details: 'Translation failed.',
+        );
+      });
     }
   }
 
@@ -347,20 +442,28 @@ class _HomePageState extends State<HomePage> {
     }
 
     final sizeKb = (await File(path).length()) / 1024;
-    _log.info('SARVAM',
+    final translating = _translateToEnglish;
+    _log.info(
+        'SARVAM',
         'Recording stopped (${sizeKb.toStringAsFixed(1)} KB). Uploading to '
-        'Sarvam Saarika (model saarika:v2.5, language_code=${_language.sarvamCode})…');
+        '${translating ? "Sarvam Saaras (speech→ENGLISH text, model saaras:v2.5, spoken language auto-detected)" : "Sarvam Saarika (speech→text, model saarika:v2.5, language_code=${_language.sarvamCode})"}…');
     setState(() => _state = PocState.sarvamSending);
 
     try {
-      final result = await _sarvam.transcribe(
-        filePath: path,
-        apiKey: _apiKeyController.text.trim(),
-        languageCode: _language.sarvamCode,
-      );
+      final result = translating
+          ? await _sarvam.transcribeToEnglish(
+              filePath: path,
+              apiKey: _apiKeyController.text.trim(),
+            )
+          : await _sarvam.transcribe(
+              filePath: path,
+              apiKey: _apiKeyController.text.trim(),
+              languageCode: _language.sarvamCode,
+            );
       _log.success(
           'SARVAM',
-          'Transcript in ${result.latencyMs}ms: "${result.transcript}" | '
+          '${translating ? "English transcript" : "Transcript"} in '
+          '${result.latencyMs}ms: "${result.transcript}" | '
           'detected language: ${result.detectedLanguage ?? "n/a"} | '
           'request id: ${result.requestId ?? "n/a"}. Engine used: SARVAM (paid).');
       setState(() {
@@ -370,7 +473,9 @@ class _HomePageState extends State<HomePage> {
           transcript: result.transcript,
           confidence: null, // Sarvam's API does not return a confidence score
           latencyMs: result.latencyMs,
-          languageCode: _language.sarvamCode,
+          languageCode: translating
+              ? '${result.detectedLanguage ?? "auto"} → en-IN'
+              : _language.sarvamCode,
           details:
               'Detected: ${result.detectedLanguage ?? "n/a"} · Request: ${result.requestId ?? "n/a"}',
         );
@@ -396,6 +501,7 @@ class _HomePageState extends State<HomePage> {
         PocState.sarvamRecording =>
           'Recording for Sarvam — speak again, tap mic to stop',
         PocState.sarvamSending => 'Uploading to Sarvam AI…',
+        PocState.translating => 'Translating to English (Sarvam)…',
       };
 
   Color get _micColor => switch (_state) {
@@ -403,6 +509,7 @@ class _HomePageState extends State<HomePage> {
         PocState.nativeListening => Colors.green,
         PocState.sarvamRecording => Colors.deepPurple,
         PocState.sarvamSending => Colors.grey,
+        PocState.translating => Colors.teal,
       };
 
   IconData get _micIcon => switch (_state) {
@@ -410,6 +517,7 @@ class _HomePageState extends State<HomePage> {
         PocState.nativeListening => Icons.hearing,
         PocState.sarvamRecording => Icons.fiber_manual_record,
         PocState.sarvamSending => Icons.cloud_upload,
+        PocState.translating => Icons.translate,
       };
 
   @override
@@ -515,6 +623,19 @@ class _HomePageState extends State<HomePage> {
               _log.info('APP', 'Force Sarvam ${v ? "enabled" : "disabled"}.');
             },
           ),
+          SwitchListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Output English (translate Tamil speech)'),
+            subtitle: const Text(
+                'Native Tamil text → Sarvam translate · fallback uses Saaras (speech → English)',
+                style: TextStyle(fontSize: 11)),
+            value: _translateToEnglish,
+            onChanged: (v) {
+              setState(() => _translateToEnglish = v);
+              _log.info('APP', 'Output English ${v ? "enabled" : "disabled"}.');
+            },
+          ),
           TextField(
             controller: _apiKeyController,
             obscureText: true,
@@ -558,8 +679,11 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildResultCard(SttOutcome o) {
-    final isNative = o.engine == Engine.native;
-    final badgeColor = isNative ? Colors.green : Colors.deepPurple;
+    final badgeColor = switch (o.engine) {
+      Engine.native => Colors.green,
+      Engine.sarvam => Colors.deepPurple,
+      Engine.hybrid => Colors.teal,
+    };
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: Padding(
