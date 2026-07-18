@@ -1,0 +1,23 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+pubspec.lock
+
+# Generated platform folders (created locally by `flutter create .` / setup.sh).
+# They are machine-generated; keeping them out of git keeps the POC small.
+android/
+ios/
+linux/
+macos/
+windows/
+web/
+test/
+
+# IDE
+.idea/
+*.iml
+.vscode/

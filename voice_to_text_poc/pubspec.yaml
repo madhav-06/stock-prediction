@@ -1,0 +1,33 @@
+name: voice_to_text_poc
+description: "POC: on-device speech-to-text first, Sarvam AI as fallback (Tamil / English / Tanglish)."
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Native on-device speech recognition (Android SpeechRecognizer / iOS SFSpeechRecognizer)
+  speech_to_text: ^7.0.0
+
+  # Microphone recording to WAV (used only for the Sarvam fallback path)
+  record: ^5.1.2
+
+  # Temp directory for the recorded WAV file
+  path_provider: ^2.1.4
+
+  # HTTP client + multipart content-type for the Sarvam API call
+  http: ^1.2.2
+  http_parser: ^4.0.2
+
+  # Remember the Sarvam API key between app restarts (POC convenience)
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
